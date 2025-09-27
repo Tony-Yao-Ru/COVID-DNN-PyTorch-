@@ -40,7 +40,7 @@ A beginner‑friendly walkthrough and reference implementation for training a si
 
 ```bash
 # (optional) create a virtualenv or conda env
-pip install torch torchvision torchaudio  # or follow pytorch.org selector for CUDA
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 pip install numpy pandas matplotlib
 ```
 
