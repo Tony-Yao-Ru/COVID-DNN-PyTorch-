@@ -1,80 +1,3 @@
-# COVID DNN (PyTorch)
-
-A beginner‑friendly walkthrough and reference implementation for training a simple regression DNN (fully‑connected network) on the **ML2020 COVID‑19** tabular dataset. It includes:
-
-* A custom `Dataset` that loads CSVs, selects features, and normalizes
-* A minimal DNN (`Linear → LeakyReLU → Linear`) for regression
-* A real‑time learning‑curve plotter
-* Train/Dev split, early stopping, MSE tracking and model checkpointing
-* A handy function to scatter‑plot predictions vs ground truth
-
-> If you're new to PyTorch/tabular ML, start with **“Build it from scratch (step‑by‑step)”** below.
-
----
-
-## 1) Project structure
-
-```
-<repo-root>/
-├─ Data/
-│  ├─ covid.train.csv
-│  └─ covid.test.csv
-├─ Model/
-│  └─ covid_dnn.pth         # will be created during training
-├─ covid_dnn.py             # the code in this README
-└─ README.md
-```
-
-* Put the training CSV at `Data/covid.train.csv` and the test CSV at `Data/covid.test.csv`.
-* The script saves the best model to `Model/covid_dnn.pth`.
-
----
-
-## 2) Quick start
-
-**Requirements**
-
-* Python 3.9+ (3.10+ recommended)
-* PyTorch (CPU is fine; CUDA optional)
-* NumPy, pandas, matplotlib
-
-**Install**
-
-```bash
-# (optional) create a virtualenv or conda env
-pip install torch torchvision torchaudio  # or follow pytorch.org selector for CUDA
-pip install numpy pandas matplotlib
-```
-
-**Run**
-
-```bash
-python covid_dnn.py
-```
-
-You’ll see a live learning‑curve window and console logs per epoch. The best model is auto‑saved.
-
----
-
-## 3) What problem are we solving?
-
-* **Task**: predict a continuous target (regression) from tabular features in `covid.train.csv`.
-* **Target column**: The code assumes the **last column** in `covid.train.csv` is the regression label.
-* **Feature selection**:
-
-  * `target_only=False`: use (almost) all columns as input features except the last one (target).
-  * `target_only=True`: use the first 40 columns **plus** any columns whose correlation with the target column `tested_positive.2` exceeds a threshold (here `|r| > 0.7`).
-
-> If your CSV schema is different, update the column names/indices in the dataset class.
-
----
-
-## 4) Build it from scratch (step‑by‑step)
-
-This section teaches you **how to write the code yourself**. Each step corresponds to pieces you’ll see in `covid_dnn.py`.
-
-### Step A-imports and device
-```python
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -89,11 +12,33 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-```
-- Use DEVICE to move tensors and models to CPU or GPU automatically
 
-### Step B-Custom Dataset for CSVs
-```python
+## Plot in real-time
+class LiveCurve:
+    def __init__(self, title="Learning Curve", ylabel="Loss"):
+        plt.ion()  # interactive mode
+        self.fig, self.ax = plt.subplots()
+        (self.train_line,) = self.ax.plot([], [], label="Train")
+        (self.dev_line,)   = self.ax.plot([], [], label="Dev")
+        self.train_hist, self.dev_hist = [], []
+        self.ax.set_xlabel("Epoch")
+        self.ax.set_ylabel(ylabel)
+        self.ax.set_title(title)
+        self.ax.grid(True)
+        self.ax.legend()
+        self.fig.show()          # non-blocking
+        self.fig.canvas.draw()
+
+    def update(self, train_loss, dev_loss):
+        self.train_hist.append(train_loss)
+        self.dev_hist.append(dev_loss)
+        xs = range(1, len(self.train_hist) + 1)
+        self.train_line.set_data(xs, self.train_hist)
+        self.dev_line.set_data(xs, self.dev_hist)
+        self.ax.relim(); self.ax.autoscale_view()
+        self.fig.canvas.draw_idle()
+        plt.pause(0.001)  # allow GUI to refresh
+
 ## Dataset for loading and preprocessing the COVID-19 dataset
 class COVID19dataset(Dataset):
     def __init__(self, file_path, mode='train', target_only=False, normalize=True):
@@ -110,6 +55,9 @@ class COVID19dataset(Dataset):
             cor = df.corr()['tested_positive.2']
             best_features = cor[cor.abs() > 0.7].index.tolist()
             feats = list(range(40)) + [df.columns.get_loc(feat) for feat in best_features]
+            # print(f"Selected features based on correlation > 0.5 with target: {best_features}")
+            # print(f"Feature indices: {feats}")
+            
         
         if mode == 'test':
             # 2.1 For test mode, use the last column as labels
@@ -143,6 +91,7 @@ class COVID19dataset(Dataset):
         self.dim = self.data.shape[1]  # Number of features
         
         print(f'Finished reading the {mode} set of COVID19 Dataset ({len(self.data)} samples found, each dim = {self.data.shape[1]})')
+        
 
     def __len__(self):
         return len(self.data)
@@ -153,28 +102,7 @@ class COVID19dataset(Dataset):
             return self.data[idx]
         else:
             return self.data[idx], self.labels[idx]
-```
 
-- load CSVs into tensors, split into train/dev/test, and normalize features. Normalization prevents some features from dominating due to scale
-- Feature selection
-- Note: In many datasets, the last column is not always the target. Double-check the CSV to ensure selecting the correct label column
-
-### Step C-DataLoaders
-```python
-def prep_dataLoader(path, mode, target_only=False, normalize=True, num_workers=0, batch_size=32, shuffle=True):
-    dataset = COVID19dataset(file_path=path, mode=mode, target_only=target_only, normalize=normalize)
-    dataLoader = DataLoader(dataset, 
-                            batch_size=batch_size, 
-                            shuffle=shuffle,
-                            num_workers=num_workers
-                            )
-    return dataLoader
-```
-
-- Dataloaders handle batching and shuffling. Shuffling prevents the model from memorizing data order
-
-### Step D-Minimal DNN for regression
-```python
 ## Deep Neural Network Model
 class DNN(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -189,12 +117,16 @@ class DNN(nn.Module):
     def forward(self, x):
         logits = self.linear_relu_stack(x)
         return logits.squeeze(1)
-```
+    
+def prep_dataLoader(path, mode, target_only=False, normalize=True, num_workers=0, batch_size=32, shuffle=True):
+    dataset = COVID19dataset(file_path=path, mode=mode, target_only=target_only, normalize=normalize)
+    dataLoader = DataLoader(dataset, 
+                            batch_size=batch_size, 
+                            shuffle=shuffle,
+                            num_workers=num_workers
+                            )
+    return dataLoader
 
-- A simple two‑layer network is often enough for baseline regression. More complexity (extra layers, dropout, etc.) can be added later
-
-### Step E-Train/val loops (with optional L1/L2)
-```python
 def train_loop(dataloader, model, loss_fn, optimizer, L1 = 0.0, L2 = 0.0):
     # Set the model to training mode - important for batch normalization and dropout layers
     # Unnecessary in this situation but added for best practices
@@ -247,16 +179,33 @@ def val_loop(dataloader, model, loss_fn):
     total_loss = total_loss / len(dataloader.dataset)              # compute averaged loss
     print(f"\tValidation MSE loss: {total_loss:>8f} \n")
     return total_loss
-```
 
-- Training requires forward pass → loss → backward pass → optimizer step
-- Always call optimizer.zero_grad() before backpropagation. Otherwise, gradients accumulate across batches, which can make training unstable
-- Add optional L1/L2 penalties to reduce overfitting (they shrink weights)
-- Validation loop checks generalization
-- Exclude bias and normalization params from regularization; this avoids harming training stability
+def plot_pred(dataloader, model, device, lim=35., preds=None, targets=None):
+    ''' Plot prediction of your DNN '''
+    if preds is None or targets is None:
+        model.eval()
+        preds, targets = [], []
+        for X, y in dataloader:
+            X, y = X.to(device), y.to(device)
+            with torch.no_grad():
+                pred = model(X)
+                preds.append(pred.detach().cpu())
+                targets.append(y.detach().cpu())
+        preds = torch.cat(preds, dim=0).numpy()
+        targets = torch.cat(targets, dim=0).numpy()
 
-### Step F-Training script + early stopping + checkpoint
-```python
+    plt.ioff()
+    plt.figure(figsize=(5, 5))
+    plt.scatter(targets, preds, c='r', alpha=0.5)
+    plt.plot([-0.2, lim], [-0.2, lim], c='b')
+    plt.xlim(-0.2, lim)
+    plt.ylim(-0.2, lim)
+    plt.xlabel('ground truth value')
+    plt.ylabel('predicted value')
+    plt.title('Ground Truth v.s. Prediction')
+    plt.show()
+
+
 if __name__ == '__main__':
     # Hyperparameters ##############################
     epochs = 1000
@@ -307,87 +256,4 @@ if __name__ == '__main__':
     model = DNN(train_set.dataset.dim, 1).to(DEVICE)  # re-instantiate the model
     model.load_state_dict(torch.load(script_directory + r'/Model/covid_dnn.pth'))  # load the best model
     plot_pred(dev_set, model, DEVICE)  # plot prediction of dev set
-```
-
-- Early stopping prevents wasting time once dev loss stops improving
-- A patience of 200 means the training will stop if the dev loss doesn’t improve for 200 epochs. Too small = you may stop too early, too large = you may waste compute
-
-### Step G-live learning-curve helper
-```python
-## Plot in real-time
-class LiveCurve:
-    def __init__(self, title="Learning Curve", ylabel="Loss"):
-        plt.ion()  # interactive mode
-        self.fig, self.ax = plt.subplots()
-        (self.train_line,) = self.ax.plot([], [], label="Train")
-        (self.dev_line,)   = self.ax.plot([], [], label="Dev")
-        self.train_hist, self.dev_hist = [], []
-        self.ax.set_xlabel("Epoch")
-        self.ax.set_ylabel(ylabel)
-        self.ax.set_title(title)
-        self.ax.grid(True)
-        self.ax.legend()
-        self.fig.show()          # non-blocking
-        self.fig.canvas.draw()
-
-    def update(self, train_loss, dev_loss):
-        self.train_hist.append(train_loss)
-        self.dev_hist.append(dev_loss)
-        xs = range(1, len(self.train_hist) + 1)
-        self.train_line.set_data(xs, self.train_hist)
-        self.dev_line.set_data(xs, self.dev_hist)
-        self.ax.relim(); self.ax.autoscale_view()
-        self.fig.canvas.draw_idle()
-        plt.pause(0.001)  # allow GUI to refresh
-```
-
-### Step H-Visualize predictions
-```python
-def plot_pred(dataloader, model, device, lim=35., preds=None, targets=None):
-    ''' Plot prediction of your DNN '''
-    if preds is None or targets is None:
-        model.eval()
-        preds, targets = [], []
-        for X, y in dataloader:
-            X, y = X.to(device), y.to(device)
-            with torch.no_grad():
-                pred = model(X)
-                preds.append(pred.detach().cpu())
-                targets.append(y.detach().cpu())
-        preds = torch.cat(preds, dim=0).numpy()
-        targets = torch.cat(targets, dim=0).numpy()
-
-    plt.ioff()
-    plt.figure(figsize=(5, 5))
-    plt.scatter(targets, preds, c='r', alpha=0.5)
-    plt.plot([-0.2, lim], [-0.2, lim], c='b')
-    plt.xlim(-0.2, lim)
-    plt.ylim(-0.2, lim)
-    plt.xlabel('ground truth value')
-    plt.ylabel('predicted value')
-    plt.title('Ground Truth v.s. Prediction')
-    plt.show()
-```
-
----
-
-## 11) Licensing & attribution
-
-* This repository is for educational use. Adapt and extend as needed for your coursework or projects.
-* **References**:
-
-  1. The code is based on Heng-Jui Chang @ NTUEE ([ML2021-Spring HW01](https://github.com/ga642381/ML2021-Spring/blob/main/HW01/HW01.ipynb)).
-  2. The dataset and resources are from **ntu-ml-2021spring**.
-
----
-
-## 12) Troubleshooting checklist
-
-* [ ] File paths correct? (`Data/` and `Model/` exist, CSV names match)
-* [ ] Last column truly is the label?
-* [ ] Any non‑numeric columns? Convert or drop them.
-* [ ] Std‑dev zeros after normalization? Add `+1e-8` guard or drop constant columns.
-* [ ] Training diverging? Lower `lr` or add `L2`.
-* [ ] No plot appearing? Remove `LiveCurve` on servers or switch to a non‑interactive backend.
-
 
