@@ -8,8 +8,6 @@ A beginner‑friendly walkthrough and reference implementation for training a si
 * Train/Dev split, early stopping, MSE tracking and model checkpointing
 * A handy function to scatter‑plot predictions vs ground truth
 
-> If you're new to PyTorch/tabular ML, start with **“Build it from scratch (step‑by‑step)”** below.
-
 ---
 
 ## 1) Project structure
